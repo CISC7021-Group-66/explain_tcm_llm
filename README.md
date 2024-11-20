@@ -6,6 +6,9 @@
 
 # Useful Command
 
+## 版本管理
+如果遠端main與本地main不同，希望遠端覆蓋本地（忽略所有本地更改），`git reset --hard origin/main`
+
 ## 查看顯存使用
 終端使用：
 ```Terminal
