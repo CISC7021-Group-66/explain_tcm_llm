@@ -1,0 +1,11 @@
+# 忽略所有 __pycache__ 文件夾
+__pycache__/
+
+# 或者忽略所有層級的 __pycache__ 文件夾
+**/__pycache__/
+
+# 忽略 .pyc 編譯文件
+*.pyc
+
+# 忽略 .pyo 編譯文件
+*.pyo
