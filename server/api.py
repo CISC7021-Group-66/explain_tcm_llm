@@ -123,10 +123,9 @@ def wrap_text_advanced(text, width=70, initial_indent="", subsequent_indent="  "
 
 # ************************ Server API 部分代碼 ************************
 # 啟動服務器 uvicorn api:app --host 0.0.0.0 --port 8000 --reload
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import json
 
 # 創建 FastAPI 應用實例
@@ -149,20 +148,17 @@ app.add_middleware(
     allow_headers=["*"],  # 允許的 HTTP 請求頭，"*" 表示全部允許
 )
 
-# 定義 Pydantic 模型
-class QueryRequest(BaseModel):
-    question: str
-
 @app.get("/")
 def read_root():
     return {"message": "Hello, World!"}
 
 
 @app.post("/query")
-async def query_model(request: QueryRequest):
+async def query_model(request: Request):
     try:
         # 獲取問題
-        question = request.question
+        body = await request.json()
+        question = body["question"]
         # 調用模型推理邏輯
         # "张某，男，27岁。患者因昨晚饮酒发热，喝凉水数杯，早晨腹痛腹泻，大便如水色黄，腹中辘辘有声，恶心欲吐，胸中满闷不舒，口干欲冷饮，舌质红、苔白腻，脉沉细数。给出中医诊断和处方建议。"
         response = get_model_response(question)
@@ -173,9 +169,11 @@ async def query_model(request: QueryRequest):
 
 
 @app.post("/fullQuery")
-async def full_query_model(request: QueryRequest):
+async def full_query_model(request: Request):
     # 獲取問題
-    question = request.question
+    body = await request.json()
+    question = body["question"]
+
     async def result_generator():
         try:
             # 初始化輸出數據
@@ -199,6 +197,11 @@ async def full_query_model(request: QueryRequest):
 
             # 第三步：逐步處理詞語貢獻度並返回結果
             for word_weight in explanation.as_list():
+                # 檢查客戶端是否已經斷開連接
+                if await request.is_disconnected():
+                    print("\n\n客戶端已斷開連接，停止計算\n\n")
+                    break
+
                 word, weight = word_weight
                 if weight > 0:
                     new_q = f"词语\"{word}\"如何影响了你刚才首次中医诊断的回答？"
