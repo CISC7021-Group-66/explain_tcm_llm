@@ -16,6 +16,12 @@ watch -n 1 nvidia-smi
 ```
 每秒刷新顯存使用。
 
+### 強行終止python進程以釋放CUDA、顯存
+終端使用：
+```Terminal
+sudo pkill -9 python
+```
+
 ## 創建版本要求
 對於 `ipynb` 需使用 `pip install pipreqsnb` 。
 
