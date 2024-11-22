@@ -159,13 +159,15 @@ def read_root():
 
 
 @app.post("/query")
-async def query_model(question):
+async def query_model(request: QueryRequest):
     try:
+        # 獲取問題
+        question = request.question
         # 調用模型推理邏輯
         # "张某，男，27岁。患者因昨晚饮酒发热，喝凉水数杯，早晨腹痛腹泻，大便如水色黄，腹中辘辘有声，恶心欲吐，胸中满闷不舒，口干欲冷饮，舌质红、苔白腻，脉沉细数。给出中医诊断和处方建议。"
         response = get_model_response(question)
         print(response)
-        return response
+        return json.dumps(response, ensure_ascii=False) + "\n"
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
