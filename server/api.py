@@ -124,9 +124,34 @@ def wrap_text_advanced(text, width=70, initial_indent="", subsequent_indent="  "
 # ************************ Server API 部分代碼 ************************
 # 啟動服務器 uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import json
 
 # 創建 FastAPI 應用實例
 app = FastAPI()
+
+# 配置允許的來源
+origins = [
+    # "http://localhost:3000",  # 本地開發的前端
+    # "http://127.0.0.1:3000",  # 本地開發的另一種形式
+    # "https://your-frontend-domain.com",  # 部署後的前端域名
+	"*",
+]
+
+# 添加 CORS 中間件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # 允許的來源
+    allow_credentials=True,  # 是否允許攜帶憑據（如 Cookie）
+    allow_methods=["*"],  # 允許的 HTTP 方法，如 GET、POST 等，"*" 表示全部允許
+    allow_headers=["*"],  # 允許的 HTTP 請求頭，"*" 表示全部允許
+)
+
+# 定義 Pydantic 模型
+class QueryRequest(BaseModel):
+    question: str
 
 @app.get("/")
 def read_root():
@@ -146,47 +171,65 @@ async def query_model(question):
 
 
 @app.post("/fullQuery")
-async def full_query_model(question):
-    try:
-        response = get_model_response(question)
-        print(response)
-        output = []
-        output.append({"o_question": question, "o_response": response})
-        print("使用LIME計算詞語貢獻度中...")
+async def full_query_model(request: QueryRequest):
+    # 獲取問題
+    question = request.question
+    async def result_generator():
+        try:
+            # 初始化輸出數據
+            output = []
 
-        # 生成解釋
-        explanation = explainer.explain_instance(
-            text_instance=question,
-            classifier_fn=predictor,
-            num_features=len(chinese_tokenizer(question)),
-            num_samples=1000,
-            labels=[0, 1],
-        )
+            # 第一步：生成初始模型響應
+            response = get_model_response(question)
+            output.append({"o_question": question, "o_response": response, "words":chinese_tokenizer(question)})
+            yield json.dumps(output[0], ensure_ascii=False) + "\n"
 
-        # 自動提問
-        for word_weight in explanation.as_list():
-            word, weight = word_weight
-            if weight>0:
-                new_q = "词语\""+word+"\"如何影响了你刚才首次中医诊断的回答？"
+            print("使用LIME計算詞語貢獻度中...")
+
+            # 第二步：生成解釋
+            explanation = explainer.explain_instance(
+                text_instance=question,
+                classifier_fn=predictor,
+                num_features=len(chinese_tokenizer(question)),
+                num_samples=1000,
+                labels=[0, 1],
+            )
+
+            # 第三步：逐步處理詞語貢獻度並返回結果
+            for word_weight in explanation.as_list():
+                word, weight = word_weight
+                if weight > 0:
+                    new_q = f"词语\"{word}\"如何影响了你刚才首次中医诊断的回答？"
+                else:
+                    new_q = f"词语\"{word}\"为何对你刚才首次中医诊断的回答影响较小？我应该怎么样提问？"
+
                 print("\n=== 病人提問 ===")
-                print(wrap_text((new_q), width=30))
+                print(new_q)
 
-                print("\n=== 模型結果 ===")
+                # 模型生成新響應
                 new_response = get_model_response(new_q)
-                print(wrap_text(new_response, width=30))
-            else:
-                new_q = "词语\""+word+"\"为何对你刚才首次中医诊断的回答影响较小？我应该怎么样提问？"
-                print("\n=== 病人提問 ===")
-                print(wrap_text((new_q), width=30))
-
                 print("\n=== 模型結果 ===")
-                new_response = get_model_response(new_q)
-                print(wrap_text(new_response, width=30))
-            output.append({"question": new_q, "response": new_response})
+                print(new_response)
 
-        return output
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+                # 將結果添加到輸出列表並返回給前端
+                result = {"word": word, "weight": weight, "question": new_q, "response": new_response}
+                output.append(result)
+                yield json.dumps(result, ensure_ascii=False) + "\n"
+
+            # 測試API用的簡單形式，可注釋LIME解釋部分
+            # for word in chinese_tokenizer(question):
+            #     new_q = f"词语\"{word}\"如何影响了你刚才首次中医诊断的回答？"
+            #     new_response = get_model_response(new_q)
+            #     result = {"word": word, "question": new_q, "response": new_response}
+            #     output.append(result)
+            #     yield json.dumps(result, ensure_ascii=False) + "\n"
+
+        except Exception as e:
+            yield json.dumps({"error": str(e)}, ensure_ascii=False) + "\n"
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # 返回流式響應
+    return StreamingResponse(result_generator(), media_type="application/json")
 
 
 if __name__ == "__main__":
