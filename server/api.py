@@ -16,109 +16,162 @@ base_model_id = "Qwen/Qwen1.5-1.8B-Chat"
 model = AutoModelForCausalLM.from_pretrained(base_model_id, device_map="auto")
 model.load_adapter(peft_model_id)
 tokenizer = AutoTokenizer.from_pretrained(
-	peft_model_id, padding_side="right", trust_remote_code=True, pad_token=""
+    peft_model_id, padding_side="right", trust_remote_code=True, pad_token=""
 )
+
+# Initialize conversation history
+conversation_history = []
 
 
 def get_model_response(question):
-	# Create the prompt without context
-	prompt = f"Question: {question}"
-	messages = [
-		# {"role": "system", "content": "You are a helpful medical assistant."},
-		{"role": "system", "content": "You are a helpful Traditional Chinese Medicine Assistant."},
-		{"role": "user", "content": prompt},
-	]
+    global conversation_history
 
-	# Prepare the input
-	text = tokenizer.apply_chat_template(
-		messages, tokenize=False, add_generation_prompt=True
-	)
-	model_inputs = tokenizer([text], return_tensors="pt").to(device)
+    # Create the prompt with context
+    prompt = f"Question: {question}"
+    conversation_history.append({"role": "user", "content": prompt})
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful Traditional Chinese Medicine medical assistant.",
+        },
+    ] + conversation_history
 
-	# Generate the response
-	generated_ids = model.generate(model_inputs.input_ids, max_new_tokens=512)
-	generated_ids = [
-		output_ids[len(input_ids) :]
-		for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-	]
+    # Prepare the input
+    text = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    model_inputs = tokenizer([text], return_tensors="pt").to(device)
 
-	# Decode the response
-	response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-	return response
+    # Generate the response
+    generated_ids = model.generate(model_inputs.input_ids, max_new_tokens=512)
+    generated_ids = [
+        output_ids[len(input_ids) :]
+        for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+    ]
+
+    # Decode the response
+    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+    # 将模型的回复添加到对话历史中
+    conversation_history.append({"role": "assistant", "content": response})
+    return response
+
+
+# 不保存對話歷史版提問，用於後續詞語分析
+def get_model_response2(question):
+    global conversation_history
+
+    # Create the prompt without context
+    prompt = f"Question: {question}"
+    messages = (
+        [
+            {
+                "role": "system",
+                "content": "You are a helpful Traditional Chinese Medicine medical assistant.",
+            },
+        ]
+        + conversation_history
+        + [
+            {"role": "user", "content": prompt},
+        ]
+    )
+
+    # Prepare the input
+    text = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    model_inputs = tokenizer([text], return_tensors="pt").to(device)
+
+    # Generate the response
+    generated_ids = model.generate(model_inputs.input_ids, max_new_tokens=512)
+    generated_ids = [
+        output_ids[len(input_ids) :]
+        for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+    ]
+
+    # Decode the response
+    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+    return response
 
 
 def predictor(texts):
-	results = []
-	for text in texts:
-		# 創建消息格式
-		messages = [
-			{"role": "system", "content": "You are a helpful medical assistant."},
-			{"role": "user", "content": text},
-		]
+    results = []
+    for text in texts:
+        prompt = f'Question:"{text}" Question中的詞語对你生成中医回答相关, 则详细分析原因, 不相关则仅回答 0'
+        # 創建消息格式
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful Traditional Chinese Medicine medical assistant.",
+            },
+            {"role": "user", "content": prompt},
+        ]
 
-		# 準備輸入
-		formatted_text = tokenizer.apply_chat_template(
-			messages, tokenize=False, add_generation_prompt=True
-		)
-		inputs = tokenizer([formatted_text], return_tensors="pt").to(model.device)
+        # 準備輸入
+        formatted_text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = tokenizer([formatted_text], return_tensors="pt").to(model.device)
 
-		with torch.no_grad():
-			outputs = model(**inputs)
-			logits = outputs.logits
-			probs = torch.softmax(logits[0, -1], dim=-1)
-			top_probs = torch.topk(probs, 2)
-			prob_array = np.array(
-				[top_probs.values[0].item(), top_probs.values[1].item()]
-			)
-			prob_array = prob_array / prob_array.sum()
-			results.append(prob_array)
+        with torch.no_grad():
+            outputs = model(**inputs)
+            logits = outputs.logits
+            probs = torch.softmax(logits[0, -1], dim=-1)
+            top_probs = torch.topk(probs, 2)
+            prob_array = np.array(
+                [top_probs.values[0].item(), top_probs.values[1].item()]
+            )
+            prob_array = prob_array / prob_array.sum()
+            results.append(prob_array)
 
-	return np.array(results)
+    return np.array(results)
 
 
 # 自定義分詞函數
 def chinese_tokenizer(text):
-	# 使用 jieba 進行分詞
-	words = jieba.cut(text, cut_all=False)
+    # 使用 jieba 進行分詞
+    words = jieba.cut(text, cut_all=False)
 
-	# 定義要忽略的標點符號，可以擴展為包含中文標點
-	punctuation = string.punctuation + "，。！？；：“”‘’（）《》、"
+    # 定義要忽略的標點符號，可以擴展為包含中文標點
+    punctuation = string.punctuation + "，。！？；：“”‘’（）《》、"
 
-	# 過濾掉標點符號
-	filtered_words = [word for word in words if word not in punctuation]
+    # 過濾掉標點符號
+    filtered_words = [word for word in words if word not in punctuation]
 
-	return filtered_words
+    return filtered_words
 
 
 # 創建解釋器
 explainer = LimeTextExplainer(
-	# class_names=["症状诊断相关", "症状诊断不相关"],
-	class_names=["中医病症诊断结果相关", "中医病症诊断结果不相关"],
-	split_expression=chinese_tokenizer,  # 使用jieba分詞
-	bow=True,
-	random_state=42,
+    # class_names=["症状诊断相关", "症状诊断不相关"],
+    class_names=["中医病症诊断结果相关", "中医病症诊断结果不相关"],
+    split_expression=chinese_tokenizer,  # 使用jieba分詞
+    bow=True,
+    random_state=42,
 )
+
 
 # 自動換行函數
 def wrap_text(text, width=70):
-	# 使用textwrap.fill()直接返回換行後的文本字符串
-	wrapped_text = textwrap.fill(text, width=width)
-	return wrapped_text
+    # 使用textwrap.fill()直接返回換行後的文本字符串
+    wrapped_text = textwrap.fill(text, width=width)
+    return wrapped_text
+
 
 # 更多自定義選項的用法
 def wrap_text_advanced(text, width=70, initial_indent="", subsequent_indent="  "):
-	wrapper = textwrap.TextWrapper(
-		width=width,  # 每行最大寬度
-		initial_indent=initial_indent,  # 第一行縮進
-		subsequent_indent=subsequent_indent,  # 後續行縮進
-		break_long_words=True,  # 允許斷開長單詞
-		break_on_hyphens=True,  # 允許在連字符處斷行
-	)
-	wrapped_text = wrapper.fill(text)
-	return wrapped_text
+    wrapper = textwrap.TextWrapper(
+        width=width,  # 每行最大寬度
+        initial_indent=initial_indent,  # 第一行縮進
+        subsequent_indent=subsequent_indent,  # 後續行縮進
+        break_long_words=True,  # 允許斷開長單詞
+        break_on_hyphens=True,  # 允許在連字符處斷行
+    )
+    wrapped_text = wrapper.fill(text)
+    return wrapped_text
+
 
 # ************************ 模型部分代碼 結束 ************************
-
 
 
 # ************************ Server API 部分代碼 ************************
@@ -136,7 +189,7 @@ origins = [
     # "http://localhost:3000",  # 本地開發的前端
     # "http://127.0.0.1:3000",  # 本地開發的另一種形式
     # "https://your-frontend-domain.com",  # 部署後的前端域名
-	"*",
+    "*",
 ]
 
 # 添加 CORS 中間件
@@ -147,6 +200,7 @@ app.add_middleware(
     allow_methods=["*"],  # 允許的 HTTP 方法，如 GET、POST 等，"*" 表示全部允許
     allow_headers=["*"],  # 允許的 HTTP 請求頭，"*" 表示全部允許
 )
+
 
 @app.get("/")
 def read_root():
@@ -170,6 +224,8 @@ async def query_model(request: Request):
 
 @app.post("/fullQuery")
 async def full_query_model(request: Request):
+    global conversation_history
+    conversation_history = []
     # 獲取問題
     body = await request.json()
     question = body["question"]
@@ -181,7 +237,13 @@ async def full_query_model(request: Request):
 
             # 第一步：生成初始模型響應
             response = get_model_response(question)
-            output.append({"o_question": question, "o_response": response, "words":chinese_tokenizer(question)})
+            output.append(
+                {
+                    "o_question": question,
+                    "o_response": response,
+                    "words": chinese_tokenizer(question),
+                }
+            )
             yield json.dumps(output[0], ensure_ascii=False) + "\n"
 
             print("使用LIME計算詞語貢獻度中...")
@@ -204,20 +266,25 @@ async def full_query_model(request: Request):
 
                 word, weight = word_weight
                 if weight > 0:
-                    new_q = f"词语\"{word}\"如何影响了你刚才首次中医诊断的回答？"
+                    new_q = f'请逐步解释词语"{word}"如何影响了你刚才首次中医诊断的回答？'
                 else:
-                    new_q = f"词语\"{word}\"为何对你刚才首次中医诊断的回答影响较小？我应该怎么样提问？"
+                    new_q = f'结合我的首次提问，请逐步解释词语"{word}"为何对你刚才首次中医诊断的回答影响较小？我应该怎样提问？'
 
                 print("\n=== 病人提問 ===")
                 print(new_q)
 
                 # 模型生成新響應
-                new_response = get_model_response(new_q)
+                new_response = get_model_response2(new_q)
                 print("\n=== 模型結果 ===")
                 print(new_response)
 
                 # 將結果添加到輸出列表並返回給前端
-                result = {"word": word, "weight": weight, "question": new_q, "response": new_response}
+                result = {
+                    "word": word,
+                    "weight": weight,
+                    "question": new_q,
+                    "response": new_response,
+                }
                 output.append(result)
                 yield json.dumps(result, ensure_ascii=False) + "\n"
 
@@ -241,5 +308,5 @@ if __name__ == "__main__":
     print("啟動API服務器中...")
     # 記得允許防火墻開放端口：sudo ufw allow 8000
     import uvicorn
-    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=False)
 
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=False)
